@@ -1,0 +1,208 @@
+---
+title: "Imperial Data Dive: single cell alignment project"
+author: "Nathan Skene"
+date: "01/07/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+R.utils::sourceDirectory("R")
+library(tidyverse)
+```
+
+## Notes:
+
+Tasic vs Zeisel2015:
+  - Some cell types are not shared by both datasets, identifying these will be interesting challenge
+  - Many cells match to multiple cell types
+
+## Which datasets?
+
+The following datasets will be provided
+
+* Mouse single cell pair of datasets: Tasic vs Zeisel 2015
+* Human vs mouse nuclei: Allan Human MTG vs Allan Mouse Visual (Tasic)
+* Intron vs Exon: Allan MTG
+* Two additional datasets: Zeisel 2018 & controls from ours
+
+The datasets will be provided as a list. The expression matrix will be provided in sparse matrix format. An annotation table will accompany detailing the associated cell types. Only genes shared across all datasets will be used. Mouse genes will be mapped to human using the 1:1 package.
+
+## Dataset: Zeisel 2015 (mouse somatosensory + hippocampus)
+
+A function already exists in the EWCE package to load this dataset: 
+
+```{r pressure, echo=FALSE}
+library(devtools)
+install_github("nathanskene/ewce")
+library(EWCE)
+linURL = "goo.gl/r5Y24y"
+path = "expression_mRNA_17-Aug-2014.txt"
+download.file(linURL, destfile=path)
+zeisel2015 = EWCE::load.linnarsson.sct.data(path)
+zeisel2015$exp = Matrix::Matrix(zeisel2015$exp)
+file.remove(path)
+zeisel2015$annot = zeisel2015$annot %>% dplyr::rename(cellID=cell_id,celltype=level2class) %>% dplyr::select(cellID,celltype)
+save(tasic,file="Output/zeisel2015.rda")
+```
+
+## Dataset: Tasic (mouse visual cortex)
+
+The Tasic data originally comes from here: http://casestudies.brain-map.org/celltax#section_explorea
+
+It is associated with this paper: https://www.nature.com/articles/nn.4216
+
+The Hemberg group downloaded the data and put it on AWS, which is what we download here (https://github.com/hemberg-lab/scRNA.seq.datasets/blob/master/bash/tasic.sh). 
+
+```{r }
+tasic = get_tasic_data()
+tasic$annot = tasic$annot %>% dplyr::rename(cellID=long_name,celltype=Tasic_et_al_2016_label) %>% dplyr::select(cellID,celltype)
+save(tasic,file="Output/tasic.rda")
+```
+
+## Mapping between Tasic and Zeisel2015
+
+This is given in Supplementary Table 17 of the Tasic paper: https://www.nature.com/articles/nn.4216
+
+https://media.nature.com/original/nature-assets/neuro/journal/v19/n2/extref/nn.4216-S1.pdf
+
+```{r }
+library("openxlsx")
+mapping_tasic_zeisel2015 = read.xlsx("Data/zeisel_tasic_mapping.xlsx")
+mapping_tasic_zeisel2015$comparison = "tasic - zeisel2015"
+save(mapping_tasic_zeisel2015,file="Output/mapping_tasic_zeisel2015.rda")
+
+check_if_all_celltypes_mapped(annotCTs=tasic$annot$celltype,mappingCTs=mapping_tasic_zeisel2015$Tasic)
+check_if_all_celltypes_mapped(annotCTs=zeisel2015$annot$celltype,mappingCTs=mapping_tasic_zeisel2015$Zeisel)
+```
+
+## Intron vs Exon data
+
+Data comes from here: http://celltypes.brain-map.org/download#transcriptomics
+
+```{r }
+library(data.table)
+linURL = "http://celltypes.brain-map.org/api/v2/well_known_file_download/694416044"
+path = "Allan_MTG.zip"
+download.file(linURL, destfile=path)
+unzip(path)
+file.remove(path)
+
+allanMTG_intron = load_allan_exp_matrix_with_hgnc_symbols(path="human_MTG_2018-06-14_intron-matrix.csv")
+allanMTG_exon   = load_allan_exp_matrix_with_hgnc_symbols(path="human_MTG_2018-06-14_exon-matrix.csv")
+
+# Check all intron cell types have corresponding exon cell types
+sum(!unique(allanMTG_exon$annot$celltype) %in% unique(allanMTG_intron$annot$celltype))
+
+# Delete the files
+lapply(list(list.files(pattern="human_MTG_2018-06-14")),FUN=file.remove)
+
+# Create the mapping file
+mapping_allanMTG_intron_exon = data.frame(allanMTG_intron=unique(allanMTG_exon$annot$celltype),allanMTG_exon=unique(allanMTG_exon$annot$celltype))
+mapping_allanMTG_intron_exon$comparison = "allanMTG_intron - allanMTG_exon"
+save(mapping_allanMTG_intron_exon,file="Output/mapping_allanMTG_intron_exon.rda")
+
+# Drop genes which are not expressed in one of the cell types
+unexpressed_intron = Matrix::rowSums(allanMTG_intron$exp)==0
+unexpressed_exon   = Matrix::rowSums(allanMTG_exon$exp)==0 
+unexpressed        = unexpressed_intron | unexpressed_exon
+allanMTG_intron$exp = allanMTG_intron$exp[!unexpressed,]
+allanMTG_exon$exp   = allanMTG_exon$exp[!unexpressed,]
+
+# Save
+save(allanMTG_intron,file="Output/allanMTG_intron.rda")
+save(allanMTG_exon,file="Output/allanMTG_exon.rda")
+```
+
+## Allan Mouse to Human mapping
+
+This paper describes how they mapped mouse V1 to human MTG:
+https://www.biorxiv.org/content/10.1101/384826v1.abstract
+
+The mapping is shown in Extended Data Figure 9.
+
+The human dataset was the MTG with 15,206 nuclei (downloaded above).
+
+The mouse V1 dataset is not the original Tasic et al dataset (which didn't have that many cells). It's  an updated version with 15,413 cells downloadable from here: http://celltypes.brain-map.org/download#transcriptomics
+
+```{r }
+library(data.table)
+linURL = "http://celltypes.brain-map.org/api/v2/well_known_file_download/694413985"
+path = "Allan_Mouse_V1.zip"
+download.file(linURL, destfile=path)
+unzip(path)
+file.remove(path)
+
+Allan_Mouse_V1_intron = load_allan_exp_matrix_with_hgnc_symbols(path="mouse_VISp_2018-06-14_intron-matrix.csv",prelim="mouse_VISp_2018-06-14")
+Allan_Mouse_V1_exon   = load_allan_exp_matrix_with_hgnc_symbols(path="mouse_VISp_2018-06-14_exon-matrix.csv",prelim="mouse_VISp_2018-06-14")
+Allan_Mouse_V1        = Allan_Mouse_V1_intron
+Allan_Mouse_V1$exp    = Allan_Mouse_V1_intron$exp + Allan_Mouse_V1_exon$exp
+
+# Delete the files
+lapply(list(list.files(pattern="mouse_VISp_2018-06-14")),FUN=file.remove)
+
+# Drop genes which are not expressed in one of the cell types
+unexpressed   = Matrix::rowSums(Allan_Mouse_V1$exp)==0 
+Allan_Mouse_V1$exp = Allan_Mouse_V1$exp[!unexpressed,]
+
+# Save
+save(Allan_Mouse_V1,file="Output/Allan_Mouse_V1.rda")
+```
+
+The Allan human MTG dataset has so far been used with introns and exons split, so now merge them as was done for the mouse:
+
+```{r }
+Allan_MTG     = allanMTG_exon
+Allan_MTG$exp = allanMTG_intron$exp + allanMTG_exon$exp
+save(Allan_MTG,file="Allan_MTG.rda")
+```
+
+The data for mapping between mouse and human was irritatingly given only as part of a figure. I used 'Snaggit' to pull the text from the figure using OCR, then manually corrected the names. Most cells map to multiple cell types. I saved the mapping in a somewhat raw file as "Data/mouse_human_mapping.xslx". Now let's convert that to the same format used previously.
+
+```{r }
+rMapping = read.xlsx("Data/mouse_human_mapping.xlsx")
+rMapping$species = gsub("(mouse|human) .*","\\1",rMapping$celltype)
+rMapping$celltype2 = gsub("(mouse|human) (.*)","\\2",rMapping$celltype)
+
+fullMapping = NULL
+for(group in unique(rMapping$group)){
+  subData = rMapping[rMapping$group==group,]
+  if(!"human" %in% subData$species){
+    tmp = data.frame(celltype="-",group=group,species="human",celltype2="-")
+    subData=rbind(subData,tmp)
+  }
+  if(!"mouse" %in% subData$species){
+    tmp = data.frame(celltype="-",group=group,species="mouse",celltype2="-")
+    subData=rbind(subData,tmp)
+  }
+  subData_ms = subData[subData$species=="mouse",]
+  subData_hm = subData[subData$species=="human",]  
+  tmp = expand.grid(subData_hm$celltype2,subData_ms$celltype2)
+  colnames(tmp) = c("Allan_MTG","Allan_Mouse_V1")
+  if(is.null(fullMapping)){
+    fullMapping = tmp
+  }else{
+    fullMapping = rbind(fullMapping,tmp)
+  }
+}
+
+mapping_allan_mouseV1_humanMTG = fullMapping
+mapping_allan_mouseV1_humanMTG$comparison = "Allan_MTG - Allan_Mouse_V1"
+save(mapping_allan_mouseV1_humanMTG,file="Output/mapping_allan_mouseV1_humanMTG.rda")
+
+check_if_all_celltypes_mapped(annotCTs=Allan_MTG$annot$celltype,mappingCTs=mapping_allan_mouseV1_humanMTG$Allan_MTG)
+check_if_all_celltypes_mapped(annotCTs=Allan_Mouse_V1$annot$celltype,mappingCTs=mapping_allan_mouseV1_humanMTG$Allan_Mouse_V1)
+
+sort(unique(Allan_Mouse_V1$annot$celltype))
+```
+
+As the mappings are many<->many it should be understood that mapping to any of the correct celltypes is good enough, and it is not neccesary to map to all of them. However, if a celltype does map to "-" then it shouldn't map to anything.
+
+
+## Zeisel 2018
+
+The mapping against Zeisel 2015 (and various other datasets is given in Supplementary Table 2): https://www.sciencedirect.com/science/article/pii/S009286741830789X?via%3Dihub#mmc2
+
+https://ars.els-cdn.com/content/image/1-s2.0-S009286741830789X-mmc2.xlsx
+
+
