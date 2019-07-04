@@ -116,14 +116,7 @@ save(allanMTG_exon,file="Output/allanMTG_exon.rda")
 
 ## Allan Mouse to Human mapping
 
-This paper describes how they mapped mouse V1 to human MTG:
-https://www.biorxiv.org/content/10.1101/384826v1.abstract
-
-The mapping is shown in Extended Data Figure 9.
-
-The human dataset was the MTG with 15,206 nuclei (downloaded above).
-
-The mouse V1 dataset is not the original Tasic et al dataset (which didn't have that many cells). It's  an updated version with 15,413 cells downloadable from here: http://celltypes.brain-map.org/download#transcriptomics
+A large single cell dataset from mouse visual cortex is available. While there is no authoratitive mapping available, it should form a good comparison set (and the cell type names are relatively informative). The dataset has 15,413 cells downloadable from here: http://celltypes.brain-map.org/download#transcriptomics
 
 ```{r }
 library(data.table)
@@ -149,60 +142,93 @@ Allan_Mouse_V1$exp = Allan_Mouse_V1$exp[!unexpressed,]
 save(Allan_Mouse_V1,file="Output/Allan_Mouse_V1.rda")
 ```
 
-The Allan human MTG dataset has so far been used with introns and exons split, so now merge them as was done for the mouse:
-
-```{r }
-Allan_MTG     = allanMTG_exon
-Allan_MTG$exp = allanMTG_intron$exp + allanMTG_exon$exp
-save(Allan_MTG,file="Allan_MTG.rda")
-```
-
-The data for mapping between mouse and human was irritatingly given only as part of a figure. I used 'Snaggit' to pull the text from the figure using OCR, then manually corrected the names. Most cells map to multiple cell types. I saved the mapping in a somewhat raw file as "Data/mouse_human_mapping.xslx". Now let's convert that to the same format used previously.
-
-```{r }
-rMapping = read.xlsx("Data/mouse_human_mapping.xlsx")
-rMapping$species = gsub("(mouse|human) .*","\\1",rMapping$celltype)
-rMapping$celltype2 = gsub("(mouse|human) (.*)","\\2",rMapping$celltype)
-
-fullMapping = NULL
-for(group in unique(rMapping$group)){
-  subData = rMapping[rMapping$group==group,]
-  if(!"human" %in% subData$species){
-    tmp = data.frame(celltype="-",group=group,species="human",celltype2="-")
-    subData=rbind(subData,tmp)
-  }
-  if(!"mouse" %in% subData$species){
-    tmp = data.frame(celltype="-",group=group,species="mouse",celltype2="-")
-    subData=rbind(subData,tmp)
-  }
-  subData_ms = subData[subData$species=="mouse",]
-  subData_hm = subData[subData$species=="human",]  
-  tmp = expand.grid(subData_hm$celltype2,subData_ms$celltype2)
-  colnames(tmp) = c("Allan_MTG","Allan_Mouse_V1")
-  if(is.null(fullMapping)){
-    fullMapping = tmp
-  }else{
-    fullMapping = rbind(fullMapping,tmp)
-  }
-}
-
-mapping_allan_mouseV1_humanMTG = fullMapping
-mapping_allan_mouseV1_humanMTG$comparison = "Allan_MTG - Allan_Mouse_V1"
-save(mapping_allan_mouseV1_humanMTG,file="Output/mapping_allan_mouseV1_humanMTG.rda")
-
-check_if_all_celltypes_mapped(annotCTs=Allan_MTG$annot$celltype,mappingCTs=mapping_allan_mouseV1_humanMTG$Allan_MTG)
-check_if_all_celltypes_mapped(annotCTs=Allan_Mouse_V1$annot$celltype,mappingCTs=mapping_allan_mouseV1_humanMTG$Allan_Mouse_V1)
-
-sort(unique(Allan_Mouse_V1$annot$celltype))
-```
-
-As the mappings are many<->many it should be understood that mapping to any of the correct celltypes is good enough, and it is not neccesary to map to all of them. However, if a celltype does map to "-" then it shouldn't map to anything.
-
-
 ## Zeisel 2018
 
 The mapping against Zeisel 2015 (and various other datasets is given in Supplementary Table 2): https://www.sciencedirect.com/science/article/pii/S009286741830789X?via%3Dihub#mmc2
 
 https://ars.els-cdn.com/content/image/1-s2.0-S009286741830789X-mmc2.xlsx
 
+The full Zeisel 2018 dataset is huge (19GB). So here we'll map only against the average level of expression in each celltype.
 
+Should you wish to try against the full dataset it is available here: http://mousebrain.org/downloads.html
+
+Another challenge with this dataset is that it contains huge numbers of cell types which are not found in the other datasets.
+
+```{r }
+zeisel2018 = load_zeisel_dataset()
+mean_exp = convert_zeisel_tibble_to_exp_matrix(tibbleIN=zeisel2018,level=5)
+
+zeisel2018 = list()
+zeisel2018$exp = Matrix::Matrix(mean_exp)
+zeisel2018$annot = data.frame(cellID=colnames(zeisel2018$exp),celltype=colnames(zeisel2018$exp))
+save(zeisel2018,file="Output/zeisel2018.rda")
+
+mapping_zeisel2018_zeisel2015 = read.xlsx("https://ars.els-cdn.com/content/image/1-s2.0-S009286741830789X-mmc2.xlsx")
+mapping_zeisel2018_zeisel2015 = mapping_zeisel2018_zeisel2015[grepl("Cortex-",mapping_zeisel2018_zeisel2015$Published.cell.type),]
+mapping_zeisel2018_zeisel2015$Published.cell.type = gsub("Cortex-","",mapping_zeisel2018_zeisel2015$Published.cell.type)
+mapping_zeisel2018_zeisel2015$`This.study.cell.type.(#.cells)` = gsub("\\(.*","",mapping_zeisel2018_zeisel2015$`This.study.cell.type.(#.cells)`)
+mapping_zeisel2018_zeisel2015 = mapping_zeisel2018_zeisel2015 %>% dplyr::rename(zeisel2015=Published.cell.type,zeisel2018=`This.study.cell.type.(#.cells)`) %>%
+  dplyr::select(zeisel2015,zeisel2018)
+mapping_zeisel2018_zeisel2015$comparison = "zeisel2015 - zeisel2018"
+save(mapping_zeisel2018_zeisel2015,file="Output/mapping_zeisel2018_zeisel2015.rda")
+```
+
+## Unannotated dataset from Imperial
+
+The next challenge is to map cells from an existing unannotated / unclustered dataset (generated at Imperial) onto the datasets given above. This dataset is human nuclei from similar brain regions to most the datasets given above.
+
+```{r }
+load("Data/seurat_PDC91.rda")
+imperial_unannotated = list()
+imperial_unannotated$exp = seurat_individual@assays$RNA
+imperial_unannotated$exp = imperial_unannotated$exp[,seurat_individual$doublets=="Singlet"]
+imperial_unannotated$annot = data.frame(cellID=colnames(imperial_unannotated$exp),celltype="Unknown")
+save(imperial_unannotated,file="Output/imperial_unannotated.rda")
+```
+
+## Reduce datasets to all have the same gene symbols
+
+```{r }
+allDatasets = list()
+allDatasets[["zeisel2015"]] = zeisel2015
+allDatasets[["tasic"]] = tasic
+allDatasets[["allanMTG_intron"]] = allanMTG_intron # HUMAN
+allDatasets[["allanMTG_exon"]] = allanMTG_exon  # HUMAN
+allDatasets[["Allan_Mouse_V1"]] = Allan_Mouse_V1
+allDatasets[["zeisel2018"]] = zeisel2018
+allDatasets[["imperial_unannotated"]] = imperial_unannotated
+
+# Two of the datasets are from human, so convert HNGNC symbols to MGI
+devtools::install_github("nathanskene/One2one")
+keepGenesA = One2One::ortholog_data_Mouse_Human$orthologs_one2one$human.symbol %in% rownames(allDatasets[["allanMTG_intron"]]$exp)
+keepGenesB = One2One::ortholog_data_Mouse_Human$orthologs_one2one$human.symbol %in% rownames(allDatasets[["allanMTG_exon"]]$exp)
+keepGenesC = One2One::ortholog_data_Mouse_Human$orthologs_one2one$human.symbol %in% rownames(allDatasets[["imperial_unannotated"]]$exp)
+keepGenes  = keepGenesA & keepGenesB & keepGenesC
+keptGenes  = One2One::ortholog_data_Mouse_Human$orthologs_one2one$human.symbol[keepGenes]
+o2o = One2One::ortholog_data_Mouse_Human$orthologs_one2one
+rownames(o2o) = One2One::ortholog_data_Mouse_Human$orthologs_one2one$human.symbol
+o2o = o2o[keptGenes,]
+allDatasets[["allanMTG_intron"]]$exp = allDatasets[["allanMTG_intron"]]$exp[keptGenes,]
+allDatasets[["allanMTG_exon"]]$exp = allDatasets[["allanMTG_exon"]]$exp[keptGenes,]
+allDatasets[["imperial_unannotated"]]$exp = allDatasets[["imperial_unannotated"]]$exp[keptGenes,]
+rownames(allDatasets[["allanMTG_intron"]]$exp) = o2o$mouse.symbol
+rownames(allDatasets[["allanMTG_exon"]]$exp) = o2o$mouse.symbol
+rownames(allDatasets[["imperial_unannotated"]]$exp) = o2o$mouse.symbol
+keptGenes_ms = rownames(allDatasets[["allanMTG_exon"]]$exp)
+
+# Find genes used across all the datasets
+for(i in 1:length(allDatasets)){ keptGenes_ms = keptGenes_ms[keptGenes_ms %in%rownames(allDatasets[[i]]$exp)] }
+for(i in 1:length(allDatasets)){ allDatasets[[i]]$exp = allDatasets[[i]]$exp[keptGenes_ms,] }
+
+save(allDatasets,file="Output/allDatasets.rda")
+```
+
+Now merge all the mappings into one file
+
+```{r }
+mappings = list()
+mappings[["mapping_tasic_zeisel2015"]]     = mapping_tasic_zeisel2015
+mappings[["mapping_allanMTG_intron_exon"]] = mapping_allanMTG_intron_exon
+mappings[["zeisel2018_zeisel2015"]]        = mapping_zeisel2018_zeisel2015
+save(mappings,file="Output/mappings.rda")
+```
