@@ -1,0 +1,11 @@
+#$ -N {{ job_name }}               # job name
+#$ -q general                      # submit to queue named "default"
+#$ -j y                            # combine stdout/error in one file
+#$ -o {{ log_file | /dev/null }}   # output file
+#$ -cwd                            # use pwd as work dir
+#$ -V                              # use environment variable
+#$ -t 1-{{ n_jobs }}               # submit jobs as array
+
+
+ulimit -v $(( 1024 * {{ memory | 4096 }} ))
+CMQ_AUTH={{ auth }} -lwalltime=HH:MM:00 R --no-save --no-restore -e 'clustermq:::worker("{{ master }}")' 
